@@ -1,9 +1,14 @@
 <?php
 
 /**
- * FactoryCast get data From Schneider PLC over SOAP/XML 
+ * FactoryCast get data From Schneider PLC over SOAP/XML
  *
  * PHP version 7
+ *
+ * Example code :
+ * $PLC = new factorycast('10.0.10.210');
+ * var_dump($PLC->browse()); // return a array of all variable in the factorycast module namespace
+ * var_dump($PLC->read()); // return a array of all variable value in the factorycast module namespace
  *
  * @category Schneider_Plc_Communication
  * @package  Factorycast
@@ -39,46 +44,74 @@ class Factorycast
 
     /**
      * Factorycast object constructor
-     *  
+     *
      * @param string $plcIp PLC IP Adress
      *
      * @return void
      */
-    function __construct($plcIp)
+    public function __construct($plcIp)
     {
-        $this->_plcUrl = 'http://'.$plcIp.'/ws/ExtendedSymbolicXmlDa?wsdl';
+        $this->_plcUrl = 'http://'.$plcIp.'/ws/ExtendedSymbolicXmlDa?wsdl=soap12';
         $execTime = microtime(true);
-        $this->_soapClientExtendedSymbolicXmlDa = new SoapClient($this->_plcUrl);
+
+        $this->_soapClientExtendedSymbolicXmlDa = new SoapClient(
+            $this->_plcUrl,
+            array('soap_version' => SOAP_1_2)
+        );
+        //
         //var_dump($this->_soapClientExtendedSymbolicXmlDa->__getTypes());
-        $this->saveRequestTime($execTime);
+        $this->_saveRequestTime($execTime);
     }
 
     /**
      * Get the last SOAP request Time
-     *  
-     * @return int (millisecond)
+     *
+     * @return int time (millisecond)
      */
     public function getLastRequestTime()
     {
         return intval($this->_lastRequestTime*1000);
     }
 
+    /**
+     * Get total SOAP request Time
+     *
+     * @return int time (millisecond)
+     */
     public function getTotalRequestTime()
     {
         return intval($this->_totalRequestTime*1000);
     }
 
+    public function clearTotalRequestTime()
+    {
+        $this->_totalRequestTime = 0;
+    }
 
-    public function saveRequestTime($startRequestTime)
+    /**
+     * Save request time
+     *
+     * @param float $startRequestTime microtime value before start SOAP request
+     *
+     * @return void
+     */
+    private function _saveRequestTime($startRequestTime)
     {
         $lastRequestTime = (microtime(true) - $startRequestTime);
         $this->_lastRequestTime = $lastRequestTime;
         $this->_totalRequestTime += $lastRequestTime;
     }
 
-    public function errorVar($message)
+    /**
+     * Trace variable error
+     *
+     * @param string $message SOAP error message
+     *
+     * @return void
+     */
+    private function _errorVar($message)
     {
-        if (strpos($message, 'Application error:The symbol \'') !== false 
+        if (strpos($message, 'Application error:The symbol \'') !== false
             && strpos($message, 'is not present in the namespace') !== false
         ) {
             $Var = explode('\'', $message);
@@ -86,21 +119,43 @@ class Factorycast
         }
     }
 
+    /**
+     * Return last SOAP Error
+     *
+     * @return string Last Error text
+     */
     public function getLastError()
     {
         return $this->_lastErrorMessage;
     }
 
+    /**
+     * Return a array of all var with error
+     *
+     * @return array
+     */
     public function getAllErrorVar()
     {
         return $this->_allErrorVar;
     }
 
+    /**
+     * Return true if all request id ok or false
+     *
+     * @return bool
+     */
     public function getAllRequestState()
     {
         return $this->_allRequestState;
     }
 
+    /**
+     * List accessible variable in the factory cast namespace
+     *
+     * @param int $nbOfVar number of variable want to retrieve
+     *
+     * @return array var list
+     */
     public function browse($nbOfVar = 0)
     {
         $data = array();
@@ -114,16 +169,24 @@ class Factorycast
             } else {
                 break;
             }
-        } while (count($response) == $this->_NbOfSymbol 
+        } while (count($response) == $this->_NbOfSymbol
                 && (($nbOfVar > 0 && count($data) < $nbOfVar) || $nbOfVar == 0));
         return $data;
     }
     
+    /**
+     * SOAP request used by factorycast::browse function
+     *
+     * @param int $start offset start for list variable
+     * @param int $nb    number of variable (maximum 250, factorycast limitation)
+     *
+     * @return array var list
+     */
     private function _browseSoap($start, $nb)
     {
         $execTime = microtime(true);
         $result = null;
-        try{
+        try {
             $result = $this->_soapClientExtendedSymbolicXmlDa->Browse(
                 array('FirstIndex' => $start,
                 'NbOfSymbol' => $nb)
@@ -136,10 +199,17 @@ class Factorycast
             $this->_lastRequestState = false;
             $this->_allRequestState = false;
         }
-        $this->saveRequestTime($execTime);
+        $this->_saveRequestTime($execTime);
         return $result;
     }
 
+    /**
+     * Read variable value in the factory cast namespace and store in a object array factorycast::_allReadVar
+     *
+     * @param array $list array of variable name ['var1', 'var2',...] if $list is empty the function retrieve all variable
+     *
+     * @return array variable array
+     */
     public function read($list = array())
     {
         if (count($list) == 0) {
@@ -190,12 +260,19 @@ class Factorycast
         return $this->_allReadVar;
     }
 
+    /**
+     * SOAP request used by factorycast::read function
+     *
+     * @param array $list array of variable name ['var1', 'var2',...]
+     *
+     * @return array
+     */
     private function _readSoap($list)
     {
         $execTime = microtime(true);
         $result = null;
         $this->_lastRequestState = true;
-        try{
+        try {
             $result = $this->_soapClientExtendedSymbolicXmlDa->Read(
                 array('VariableList' => $list)
             );
@@ -203,22 +280,62 @@ class Factorycast
             $this->_lastErrorMessage = $error->getMessage().
                                         ' Ligne :'.
                                         $error->getLine();
-            $this->errorVar($this->_lastErrorMessage);
+            $this->_errorVar($this->_lastErrorMessage);
             $this->_lastRequestState = false;
             $this->_allRequestState = false;
         }
-        $this->saveRequestTime($execTime);
+        $this->_saveRequestTime($execTime);
         return $result;
     }
 
+    /**
+     * Description
+     *
+     * @param string $a Foo
+     *
+     * @return int $b Bar
+     */
+    private function _makeSoapVarValue($value, $type)
+    {
+        $XSDTYPE = array(
+                    'BOOL'  => array('boolean', XSD_BOOLEAN),
+                    'EBOOL' => array('unsignedByte', XSD_UNSIGNEDBYTE),
+                    'INT'   => array('short', XSD_SHORT),
+                    'DINT'   => array('short', XSD_INT),
+                    'UINT'   => array('unsignedInt', XSD_UNSIGNEDINT),
+                    'UDINT'   => array('unsignedInt', XSD_UNSIGNEDINT),
+                    'TIME'   => array('unsignedInt', XSD_UNSIGNEDINT),
+                    'DATE'   => array('dateTime', XSD_DATETIME),
+                    'TOD'   => array('dateTime', XSD_DATETIME),
+                    'DT'   => array('dateTime', XSD_DATETIME),
+                    'REAL'  => array('float', XSD_FLOAT),
+                    'BYTE'  => array('unsignedByte', XSD_UNSIGNEDBYTE),
+                    'WORD'  => array('unsignedShort', XSD_UNSIGNEDSHORT),
+                    'DWORD'  => array('unsignedInt', XSD_UNSIGNEDINT),
+                    'STRING'  => array('string', XSD_STRING),
+                    'STRING[n]'  => array('string', XSD_STRING)
+                );
+
+        return new SoapVar($value, $XSDTYPE[$type][1], $XSDTYPE[$type][0], XSD_NAMESPACE);
+    }
+
+    /**
+     * Write all modified value in factory cast variable
+     *
+     * @return void
+     */
     public function write()
     {
         if (count($this->_allWriteVar) > 0) {
             $result = $this->_writeSoap();
-            var_dump($this->_allWriteVar);
         }
     }
 
+    /**
+     * SOAP request used by factorycast::write function
+     *
+     * @return array
+     */
     private function _writeSoap()
     {
         $execTime = microtime(true);
@@ -226,41 +343,52 @@ class Factorycast
         $this->_lastRequestState = true;
         $Item = array();
         foreach ($this->_allWriteVar as $key => $value) {
-            //$Item['Item'][] = (object) array('Name' => $key, 'VariableType' => $value['VariableType'], 'Value' => '13');
-            $Item['Item']['Name'] = $key;
-            $Item['Item']['VariableType'] = $value['VariableType'];
-            $Item['Item']['Value'] = 13;
+            $Item[] = array('Name' => $key, 'VariableType' => $value['VariableType'], 'Value' => $this->_makeSoapVarValue($value['Value'], $value['VariableType']));
         }
 
-        try{
+        try {
             var_dump($Item);
             $result = $this->_soapClientExtendedSymbolicXmlDa->Write(
                 array('ItemList' => $Item)
             );
         } catch (Exception $error) {
             echo $this->_soapClientExtendedSymbolicXmlDa->__getLastRequest();
-            //var_dump($error);
             $this->_lastErrorMessage = $error->getMessage().
                                         ' Ligne :'.
                                         $error->getLine();
-            $this->errorVar($this->_lastErrorMessage);
+            $this->_errorVar($this->_lastErrorMessage);
             $this->_lastRequestState = false;
             $this->_allRequestState = false;
         }
-        $this->saveRequestTime($execTime);
+        $this->_saveRequestTime($execTime);
         return $result;
     }
 
+    /**
+     * Get variable value previously read with factorycast::read()
+     *
+     * @param string $varName Variable name
+     *
+     * @return mixed Variable value
+     */
     public function get($varName)
     {
         return $this->_allReadVar[$varName]['Value'] ?? 'Variable Not Exist';
     }
 
+    /**
+     * Set variable value before write in factory cast module
+     *
+     * @param string $varName      Variable name to set
+     * @param mixed  $value        New variable value
+     * @param string $variableType Variable Type (if not set the function read variable type from factorycast module)
+     *
+     * @return void
+     */
     public function set($varName, $value, $variableType = null)
     {
         if (is_null($variableType) && !isset($this->_allReadVar[$varName])) {
             $this->read(array($varName));
-            echo 'Lecture Variable';
             if (isset($this->_allReadVar[$varName])) {
                 $variableType = $this->_allReadVar[$varName]['VariableType'];
             } else {
@@ -276,7 +404,14 @@ class Factorycast
                                         );
     }
 
-    static public function getPLcInfo($plcIp)
+    /**
+     * Get plc Infos
+     *
+     * @param string $plcIp Factory cast ip adress
+     *
+     * @return array plc infos array
+     */
+    public static function getPLcInfo($plcIp)
     {
         $plcUrl = 'http://'.$plcIp.'/ws/Umas?wsdl';
         $plc = new SoapClient($plcUrl);
@@ -284,7 +419,7 @@ class Factorycast
         return $plcInfo;
     }
 
-    static public function getPLcStatus($plcIp)
+    public static function getPLcStatus($plcIp)
     {
         $plcUrl = 'http://'.$plcIp.'/ws/Umas?wsdl';
         $plc = new SoapClient($plcUrl);
@@ -292,7 +427,7 @@ class Factorycast
         return $plcStatus;
     }
 
-    static public function getAppliInfo($plcIp)
+    public static function getAppliInfo($plcIp)
     {
         $plcUrl = 'http://'.$plcIp.'/ws/Umas?wsdl';
         $plc = new SoapClient($plcUrl);
@@ -314,10 +449,31 @@ class Factorycast
         $appliInfos['SOAP']->ModifDate->usYear.' '.
         $appliInfos['SOAP']->ModifDate->ucHour.':'.
         $appliInfos['SOAP']->ModifDate->ucMin.':'.
-        $appliInfos['SOAP']->ModifDate->ucSec;                                  
+        $appliInfos['SOAP']->ModifDate->ucSec;
         
         return $appliInfos;
     }
 
+    public static function readEthernetIP($plcIp)
+    {
+        $plcUrl = 'http://'.$plcIp.'/ws/Eth?wsdl';
+        $plc = new SoapClient($plcUrl);
+        $ethernetInfos = $plc->ReadEthernetIP();
+    }
 
+    public static function readEthernetStatistics($plcIp)
+    {
+        $plcUrl = 'http://'.$plcIp.'/ws/Eth?wsdl';
+        $plc = new SoapClient($plcUrl);
+        $ethernetStatistics = $plc->ReadEthernetStatistics()->ReadEthernetStatisticsResult;
+        return $ethernetStatistics;
+    }
+
+    public static function getRack($plcIp)
+    {
+        $plcUrl = 'http://'.$plcIp.'/ws/Umas?wsdl';
+        $param = array('Bus' => 0, 'Drop' => 0, 'Rack' => 0, 'Slot' => 0, 'SubSlot' => 0);
+        $plc = new SoapClient($plcUrl);
+        var_dump($plc->ReadModule($param)->ReadModuleResult);
+    }
 }
